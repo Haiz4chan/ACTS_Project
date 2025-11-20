@@ -117,7 +117,7 @@ if __name__ == "__main__":
 
     print("\n>>> STRONG (1 lần)")
     system.alert_strong()
-    time.sleep(6)
+    time.sleep(5)
 
     print("\n>>> STOP ALL")
     system.stop_all()
