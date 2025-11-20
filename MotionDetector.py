@@ -1,4 +1,8 @@
 import cv2
+import ctypes
+import time
+from typing import Optional, Tuple
+from alert_manager import AlertManager
 
 
 # Vẽ vùng giám sát (ROI) bằng chuột
@@ -7,6 +11,22 @@ import cv2
 drawing = False
 ix, iy = -1, -1
 roi = None
+_stop_signal = False
+_embed_parent_id: Optional[int] = None
+_embed_size: Tuple[int, int] = (640, 480)
+
+
+def set_embed_target(hwnd: Optional[int], width: int, height: int) -> None:
+    """Đặt cửa sổ Tk cần nhúng cửa sổ OpenCV vào."""
+    global _embed_parent_id, _embed_size
+    _embed_parent_id = hwnd
+    _embed_size = (width, height)
+
+
+def request_stop() -> None:
+    """Yêu cầu dừng vòng lặp main (dành cho UI)."""
+    global _stop_signal
+    _stop_signal = True
 
 
 def draw_roi(event, x, y, flags, param):
@@ -104,18 +124,24 @@ class MotionDetector:
 
 
 def main():
-    global roi
+    global roi, _stop_signal
+    _stop_signal = False
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     detector = MotionDetector(min_area=2000)
 
-    cv2.namedWindow("Motion Detector")
-    cv2.setMouseCallback("Motion Detector", draw_roi)
-
+    window_name = "Motion Detector"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(window_name, draw_roi)
+    _embed_window_if_needed(window_name)
+    last_alert_time = 0
+    cooldown = 2  # số giây giữa 2 lần chuông
     while True:
+        if _stop_signal:
+            break
         ret, frame = cap.read()
-        frame= cv2.flip(frame, 1)
+        frame = cv2.flip(frame, 1)
         if not ret:
             break
 
@@ -153,10 +179,17 @@ def main():
         # nền trắng
         cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), -1)
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), 1)
-
+        alert_manager = AlertManager()
         if motion:
-            status = "Person: ALERT"
-            color = (0, 0, 255)  # đỏ
+            now = time.time()
+
+            # chỉ báo nếu đã qua đủ cooldown
+            if now - last_alert_time >= cooldown:
+                alert_manager.alert_strong()
+                last_alert_time = now  # cập nhật lần báo gần nhất
+
+                status = "Person: ALERT"
+                color = (0, 0, 255)
         else:
             status = "Person: SAFE"
             color = (0, 150, 0)  # xanh lá đậm
@@ -164,13 +197,36 @@ def main():
         cv2.putText(frame, status, (x1 + 15, y1 + 38),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
-        cv2.imshow("Motion Detector", frame)
+        cv2.imshow(window_name, frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cap.release()
-    cv2.destroyAllWindows()
+    cv2.destroyWindow(window_name)
+    _stop_signal = False
+
+
+def _embed_window_if_needed(window_name: str) -> None:
+    """Nhúng cửa sổ OpenCV vào Tk nếu đã cung cấp handle."""
+    if not _embed_parent_id:
+        return
+
+    user32 = ctypes.windll.user32
+    attempts = 0
+    hwnd = None
+    while attempts < 50 and not hwnd:
+        hwnd = user32.FindWindowW(None, window_name)
+        if hwnd:
+            break
+        time.sleep(0.05)
+        attempts += 1
+
+    if not hwnd:
+        return
+
+    user32.SetParent(hwnd, _embed_parent_id)
+    user32.MoveWindow(hwnd, 0, 0, _embed_size[0], _embed_size[1], True)
 
 
 if __name__ == "__main__":
