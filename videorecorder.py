@@ -3,6 +3,7 @@ import time
 import datetime
 import os
 import threading
+import atexit
 
 """
 @author Phan Cong Doanh
@@ -10,11 +11,12 @@ import threading
 
 class VideoRecorder:
 
-    def __init__(self, device=0, save_path="videos", width=640, height=480, fps=20.0):
+    def __init__(self, device=0, save_path="videos", width=640, height=480, fps=20.0, show_preview=True):
         self.device = device
         self.save_path = save_path
         self.size = (width, height)
         self.fps = fps
+        self.show_preview = show_preview
         self.fourcc = cv2.VideoWriter_fourcc(*'XVID')
 
         # --- Trạng thái ---
@@ -37,8 +39,13 @@ class VideoRecorder:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.size[0])
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.size[1])
 
+        # Check camera lúc khởi tạo
         if not self.cap.isOpened():
             raise IOError(f'Không thể mở webcam (device {self.device})')
+
+        # --- ĐĂNG KÝ BẢO HIỂM ---
+        # Khi chương trình Python tắt (bất kể lý do gì), hàm self.release sẽ được gọi
+        atexit.register(self.release)
 
     def generate_filename(self):
         now = datetime.datetime.now()
@@ -52,29 +59,49 @@ class VideoRecorder:
         Vòng lặp ghi video, chạy trên một luồng riêng.
         Nó sẽ liên tục chạy cho đến khi self.is_recording = False.
         """
+        window_name = 'Recording...'
+        frames_written = 0 # Biến đếm số khung hình đã ghi được
+
+        self.out = cv2.VideoWriter(self.current_filename, self.fourcc, self.fps, self.size)
+
+        if not self.out.isOpened():
+            print("Lô: Không thể khởi tạo file video")
+            self.is_recording = False
+            return
+
+        print(f'Bắt đầu ghi dữ liệu vào file: {self.current_filename}')
+
         try:
             while True:
                 # Kiểm tra cờ hiệu
                 with self.lock:
                     if not self.is_recording:
-                        break  # Thoát vòng lặp
+                        break
 
                 # Đọc frame
                 ret, frame = self.cap.read()
                 if ret:
                     # Ghi frame
                     self.out.write(frame)
+                    frames_written += 1
 
-                    # Hiển thị (Phần này có thể gây lỗi trên một số OS
-                    # khi chạy trong thread, nhưng thường là ổn)
-                    cv2.imshow('Recording...', frame)
+                    if self.show_preview:
+                        # Hiển thị (Phần này có thể gây lỗi trên một số OS
+                        # khi chạy trong thread, nhưng thường là ổn)
+                        cv2.imshow(window_name, frame)
 
-                    # Nhấn 'q' để dừng
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        # Nếu người dùng nhấn 'q', ta chủ động gọi stop
-                        # (Nó sẽ set self.is_recording = False và thoát vòng lặp)
-                        self.stop_recording()
-                        break
+                        # Nhấn 'q' để dừng
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
+                            self.stop_recording()
+                            break
+
+                        if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                            self.stop_recording()
+                            break
+                    # Nếu không show_preview, ta không cần waitKey(1)
+                    # Nhưng nên sleep cực ngắn để tránh ngốn 100% CPU
+                    else:
+                        time.sleep(0.001)
                 else:
                     print("Lỗi: Không nhận được khung hình.")
                     self.stop_recording()
@@ -83,12 +110,25 @@ class VideoRecorder:
             # Đảm bảo file được đóng khi vòng lặp kết thúc
             if self.out:
                 self.out.release()
-            self.out = None
+                self.out = None
             print("...Luồng ghi đã dừng và giải phóng file.")
 
+
             # Đóng cửa sổ preview
-            if cv2.getWindowProperty('Recording...', 0) >= 0:
-                cv2.destroyWindow('Recording...')
+            if self.show_preview:
+                try:
+                    cv2.destroyWindow(window_name)
+                except:
+                    pass
+
+            # Logic dọn rác khi số frame ghi được = 0, tưc file rỗng hoặc lỗi => Xóa file
+            if frames_written == 0 and self.current_filename and os.path.exists(self.current_filename):
+                print(f'Không ghi được khung hình nào. Đang xóa file rác: {self.current_filename}')
+                try:
+                    os.remove(self.current_filename)
+                    print("Đã xóa file")
+                except OSError as e:
+                    print(f'Không thể xóa file: {e}')
 
     # --- HÀM ĐÃ SỬA ---
     def start_recording(self):
@@ -98,26 +138,21 @@ class VideoRecorder:
         """
         with self.lock:
             if self.is_recording:
-                print("Lỗi: Đã đang trong quá trình ghi!")
+                print("Lỗi: Đang trong quá trình ghi!")
                 return
 
+            # 1.Tạo file
             self.current_filename = self.generate_filename()
-            self.out = cv2.VideoWriter(self.current_filename, self.fourcc, self.fps, self.size)
 
-            if not self.out:
-                print(f'Lỗi: Không thể tạo file VideoWriter.')
-                return
-
-            # Đặt cờ hiệu
+            # 2.Đặt cờ hiệu
             self.is_recording = True
 
-            # Tạo và khởi động luồng worker
+            # 3.Tạo và khởi động luồng worker
             self.worker_thread = threading.Thread(target=self._record_loop)
             self.worker_thread.start()
 
             print(f'Bắt đầu ghi. Sẽ lưu vào: {self.current_filename}')
 
-    # --- HÀM ĐÃ SỬA ---
     def stop_recording(self):
         """
         Dừng việc ghi video.
