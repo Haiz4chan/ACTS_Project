@@ -1,503 +1,277 @@
 import tkinter as tk
 from tkinter import ttk
-from typing import Optional, Protocol, Tuple
-from datetime import datetime
-from pathlib import Path
-import threading
-
-import numpy as np
 from PIL import Image, ImageTk
-import MotionDetector as motion_detector_module
+import cv2
+import os
 
+# --- CẤU HÌNH MÀU SẮC ---
+COLOR_BG = "#F8F8FF"
+COLOR_SIDEBAR = "#F8F8FF"
+COLOR_PANEL_BG = "white"
+COLOR_TEXT_PANEL = "black"
+COLOR_VIDEO_BORDER = "#778899"
 
-class VideoRecorder(Protocol):
-    def start_recording(self) -> None: ...
-
-    def stop_recording(self) -> None: ...
-
-
-class MotionDetector(Protocol):
-    def start_detection(self) -> None: ...
-
-    def stop_detection(self) -> None: ...
-
-
-class AlertManager(Protocol):
-    def notify_start(self) -> None: ...
-
-    def notify_stop(self) -> None: ...
-
-    def play_alarm(self) -> None: ...
-
-    def send_continuous_alert(self) -> None: ...
+# Màu Viền Nút
+BORDER_GREEN = "#28a745"
+BORDER_RED = "#dc3545"
+BORDER_BLUE = "#0056b3"
 
 
 class AppGUI:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root, start_cb, stop_cb, history_cb, zoning_cb, capture_cb, record_cb):
         self.root = root
         self.root.title("Advanced Camera Tracking System")
-        self.root.configure(bg="#f5f0ea")
+        self.root.configure(bg=COLOR_BG)
 
-        self.video_recorder: Optional[VideoRecorder] = None
-        self.motion_detector: Optional[MotionDetector] = None
-        self.alert_manager: Optional[AlertManager] = None
+        self.start_cb = start_cb
+        self.stop_cb = stop_cb
+        self.history_cb = history_cb
+        self.zoning_cb = zoning_cb
+        self.capture_cb = capture_cb
+        self.record_cb = record_cb
 
-        self._current_status = "idle"
-        self._alarm_job: Optional[str] = None
-        self._is_system_running = False
-        self._is_recording = False
-        self._alert_log_path = Path("alert_history.log")
-        self._alert_log_job: Optional[str] = None
-        self._alert_log_position = 0
-        self._detector_thread: Optional[threading.Thread] = None
+        self.history_paths = [None, None, None, None]
 
-        self._setup_widgets()
+        self.build_ui()
 
-    def _setup_widgets(self) -> None:
-        self.style = ttk.Style()
+    def build_ui(self):
+        self.root.columnconfigure(0, weight=0, minsize=280)
+        self.root.columnconfigure(1, weight=1)
+        self.root.rowconfigure(0, weight=1)
+
+        # --- SIDEBAR ---
+        sidebar = tk.Frame(self.root, bg=COLOR_SIDEBAR, padx=10, pady=10)
+        sidebar.grid(row=0, column=0, sticky="nsew")
+
+        # LOGO (CÓ VIỀN XANH)
+        # Tạo Frame viền ngoài (Màu xanh dương)
+        logo_border_frame = tk.Frame(sidebar, bg=BORDER_BLUE, padx=2, pady=2)
+        logo_border_frame.pack(side="bottom", pady=20)
+
+        # Tạo Frame nền trong (Màu trắng)
+        logo_inner_frame = tk.Frame(logo_border_frame, bg="white")
+        logo_inner_frame.pack(fill="both", expand=True)
+
+        lbl_logo = tk.Label(logo_inner_frame, text="[LOGO]", font=("Arial", 16, "bold"), fg="#ccc", bg="white")
+        lbl_logo.pack(padx=5, pady=5)  # Padding để logo không dính sát viền
+
         try:
-            self.style.theme_use("clam")
-        except tk.TclError:
+            img = Image.open("logo.png")
+            # Resize nhỏ lại xíu để lọt lòng khung viền
+            img.thumbnail((210, 210), Image.Resampling.LANCZOS)
+            self.logo_tk = ImageTk.PhotoImage(img)
+            lbl_logo.config(image=self.logo_tk, text="")
+        except:
             pass
 
-        self.style.configure("Main.TFrame", background="#f5f0ea")
-        self.style.configure("Sidebar.TFrame", background="#ffffff")
-        self.style.configure("Video.TFrame", background="#3e4a61")
-        self.style.configure("Start.TButton", font=("Arial", 14, "bold"))
-        self.style.configure("Stop.TButton", font=("Arial", 14, "bold"))
-
-        self.main_frame = ttk.Frame(self.root, style="Main.TFrame", padding=12)
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
-
-        self.main_frame.columnconfigure(1, weight=1)
-        self.main_frame.rowconfigure(0, weight=1)
-        self.main_frame.rowconfigure(1, weight=0)
-
-        # Khu vực sidebar (nút điều khiển)
-        sidebar = ttk.Frame(self.main_frame, style="Sidebar.TFrame", padding=8)
-        sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-
-        self.start_button = tk.Button(
-            sidebar,
-            text="START",
-            command=self.start_system,
-            font=("Arial", 16, "bold"),
-            fg="white",
-            bg="#2e7d32",
-            activebackground="#2e7d32",
-            relief=tk.FLAT,
-            height=2,
-        )
-        self.start_button.pack(fill=tk.X, pady=(0, 10))
-
-        self.stop_button = tk.Button(
-            sidebar,
-            text="STOP",
-            command=self.stop_system,
-            font=("Arial", 16, "bold"),
-            fg="white",
-            bg="#8b1c13",
-            activebackground="#8b1c13",
-            relief=tk.FLAT,
-            height=2,
-            state=tk.DISABLED,
-        )
-        self.stop_button.pack(fill=tk.X)
-
-        self.record_button = tk.Button(
-            sidebar,
-            text="RECORD",
-            command=self.toggle_recording,
-            font=("Arial", 14, "bold"),
-            fg="white",
-            bg="#1d3557",
-            activebackground="#1d3557",
-            relief=tk.FLAT,
-            height=2,
-            state=tk.DISABLED,
-        )
-        self.record_button.pack(fill=tk.X, pady=(10, 0))
-
-        note_text = (
-            "Ghi chú:\n"
-            "- Start bật giám sát & MotionDetector.\n"
-            "- Nhấn RECORD để ghi hình ngay.\n"
-            "- Vẽ ROI trực tiếp trong khung video."
-        )
-        self.note_label = tk.Label(
-            sidebar,
-            text=note_text,
-            justify=tk.LEFT,
-            anchor="w",
-            bg="#ffffff",
-            fg="#4b4b4b",
-            font=("Arial", 10),
-            wraplength=180,
-        )
-        self.note_label.pack(fill=tk.X, pady=(16, 0))
-
-        # Khu vực hiển thị video chính
-        video_frame = ttk.Frame(self.main_frame, style="Video.TFrame")
-        video_frame.grid(row=0, column=1, sticky="nsew")
-        video_frame.rowconfigure(0, weight=1)
-        video_frame.columnconfigure(0, weight=1)
-
-        self.video_container = tk.Frame(
-            video_frame,
-            bg="#3e4a61",
-            bd=2,
-            relief=tk.SUNKEN,
-        )
-        self.video_container.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-
-        self.video_placeholder = tk.Label(
-            self.video_container,
-            text="Video feed preview",
-            anchor=tk.CENTER,
-            bg="#3e4a61",
-            fg="white",
-            font=("Consolas", 16),
-        )
-        self.video_placeholder.pack(fill=tk.BOTH, expand=True)
-
-        # Khu vực đáy (status, log)
-        bottom_frame = ttk.Frame(self.main_frame, padding=(0, 12, 0, 0))
-        bottom_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        bottom_frame.columnconfigure(0, weight=1)
-
-        self.style.configure("Green.Horizontal.TProgressbar", troughcolor="#f1ebe4", background="#6fbf73")
-        self.style.configure("Yellow.Horizontal.TProgressbar", troughcolor="#f1ebe4", background="#f2c94c")
-        self.style.configure("Red.Horizontal.TProgressbar", troughcolor="#f1ebe4", background="#e57373")
-
-        self.status_progress = ttk.Progressbar(
-            bottom_frame,
-            maximum=100,
-            value=0,
-            style="Green.Horizontal.TProgressbar",
-            mode="determinate",
-        )
-        self.status_progress.pack(fill=tk.X, pady=(0, 8), ipady=6)
-
-        status_row = tk.Frame(bottom_frame, bg="#f5f0ea")
-        status_row.pack(fill=tk.X, pady=(0, 8))
-
-        history_label = tk.Label(
-            status_row, text="Log", bg="#c87f4f", fg="white", width=12, font=("Arial", 12, "bold")
-        )
-        history_label.pack(side=tk.LEFT, padx=(0, 6))
-
-        status_prefix = tk.Label(
-            status_row, text="Status:", bg="#f5f0ea", fg="#1f1f1f", font=("Arial", 12, "bold")
-        )
-        status_prefix.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.status_var = tk.StringVar(value="System ready.")
-        self.status_message_label = tk.Label(
-            status_row,
-            textvariable=self.status_var,
-            bg="#1f2a44",
-            fg="white",
-            font=("Arial", 12),
-            anchor="w",
-        )
-        self.status_message_label.pack(fill=tk.X, expand=True)
-
-        log_frame = tk.Frame(bottom_frame, bg="#3b4468", bd=2, relief=tk.GROOVE)
-        log_frame.pack(fill=tk.BOTH, expand=True)
-
-        self.log_text = tk.Text(
-            log_frame,
-            height=6,
-            bg="#1f2437",
-            fg="#dfe6f0",
-            font=("Consolas", 11),
-            state=tk.DISABLED,
-            wrap=tk.WORD,
-        )
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-
-        self._photo_image: Optional[ImageTk.PhotoImage] = None
-
-    def attach_video_recorder(self, module: VideoRecorder) -> None:
-        self.video_recorder = module
-        self._update_record_button_state()
-
-    def attach_motion_detector(self, module: MotionDetector) -> None:
-        self.motion_detector = module
-
-    def attach_alert_manager(self, module: AlertManager) -> None:
-        self.alert_manager = module
-
-    # Hàm bắt đầu chu trình giám sát (không tự động ghi hình)
-    def start_system(self) -> None:
-        self.start_button.configure(state=tk.DISABLED)
-        self.stop_button.configure(state=tk.NORMAL)
-        self._set_status("green", "System is running. Monitoring movement.")
-
-        if self.motion_detector and hasattr(self.motion_detector, "start_detection"):
-            self.motion_detector.start_detection()
-        if self.alert_manager:
-            self.alert_manager.notify_start()
-
-        self._is_system_running = True
-        self._update_record_button_state()
-        self._start_alert_history_feed()
-        self._start_motion_detector_embed()
-
-    # Hàm dừng toàn bộ hoạt động và trả UI về trạng thái chờ
-    def stop_system(self) -> None:
-        self.start_button.configure(state=tk.NORMAL)
-        self.stop_button.configure(state=tk.DISABLED)
-        self._cancel_alarm()
-        self._set_status("idle", "System stopped.")
-
-        if self._is_recording:
-            self._stop_recording()
-        if self.motion_detector and hasattr(self.motion_detector, "stop_detection"):
-            self.motion_detector.stop_detection()
-        if self.alert_manager:
-            self.alert_manager.notify_stop()
-
-        self._is_system_running = False
-        self._update_record_button_state()
-        self.reset_roi()
-        self._stop_alert_history_feed()
-        self._stop_motion_detector_embed()
-        self.update_frame(None)
-
-    # Hàm nhận thời lượng chuyển động để cập nhật trạng thái cảnh báo
-    def handle_motion_activity(self, duration_seconds: float) -> None:
-        """Called by MotionDetector to adjust status based on motion duration."""
-        if duration_seconds <= 60:
-            self._set_status("green", "Movement < 1 minute. Tracking target.")
-            self._cancel_alarm()
-            self._log("Motion detected: safe zone.")
-        elif 60 < duration_seconds <= 180:
-            self._set_status("yellow", "Movement 1-3 minutes. Periodic alarm enabled.")
-            self._schedule_alarm(interval_ms=10_000)
-            self._log("Warning zone. Alarm scheduled every 10s.")
-        else:
-            self._set_status("red", "Movement > 3 minutes! Continuous alert.")
-            self._cancel_alarm()
-            if self.alert_manager:
-                self.alert_manager.send_continuous_alert()
-            self._log("Alert zone. Continuous notifications dispatched.")
-
-    # Hàm vẽ frame OpenCV mới (giữ nguyên tỷ lệ gốc) lên label hiển thị
-    def update_frame(self, frame: Optional[np.ndarray]) -> None:
-        if frame is None:
-            self._show_placeholder("Video feed preview")
-            self._photo_image = None
-            return
-
-        if len(frame.shape) == 3 and frame.shape[2] == 3:
-            image = Image.fromarray(frame[:, :, ::-1])
-        else:
-            image = Image.fromarray(frame)
-
-        self._photo_image = ImageTk.PhotoImage(image=image)
-        self._hide_placeholder()
-        self.video_placeholder.configure(image=self._photo_image, text="")
-
-    # Hàm thêm log nội bộ (không ảnh hưởng file alert_history.log)
-    def append_log(self, message: str) -> None:
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        entry = f"[{timestamp}] {message}\n"
-        self._write_log_text(entry)
-
-    def _log(self, message: str) -> None:
-        self.append_log(message)
-
-    def _set_status(self, level: str, message: str) -> None:
-        self.status_var.set(message)
-        self._current_status = level
-
-        if level == "green":
-            self.status_message_label.configure(bg="#2d6a4f")
-            self.status_progress.configure(style="Green.Horizontal.TProgressbar")
-            self.status_progress["value"] = 33
-        elif level == "yellow":
-            self.status_message_label.configure(bg="#cc9a06")
-            self.status_progress.configure(style="Yellow.Horizontal.TProgressbar")
-            self.status_progress["value"] = 66
-        elif level == "red":
-            self.status_message_label.configure(bg="#8b1c13")
-            self.status_progress.configure(style="Red.Horizontal.TProgressbar")
-            self.status_progress["value"] = 100
-        else:
-            self.status_message_label.configure(bg="#394867")
-            self.status_progress.configure(style="Green.Horizontal.TProgressbar")
-            self.status_progress["value"] = 0
-
-    def _schedule_alarm(self, interval_ms: int) -> None:
-        self._cancel_alarm()
-
-        if not self.alert_manager:
-            return
-
-        def _alarm_tick() -> None:
-            if self.alert_manager:
-                self.alert_manager.play_alarm()
-            self._alarm_job = self.root.after(interval_ms, _alarm_tick)
-
-        self._alarm_job = self.root.after(interval_ms, _alarm_tick)
-
-    def _cancel_alarm(self) -> None:
-        if self._alarm_job:
-            self.root.after_cancel(self._alarm_job)
-            self._alarm_job = None
-
-    # Hàm xử lý nút RECORD để bật/tắt ghi hình thủ công
-    def toggle_recording(self) -> None:
-        if not self.video_recorder:
-            self._log("Record button pressed but no VideoRecorder attached.")
-            return
-
-        if not self._is_system_running:
-            self._log("Cannot record while system is stopped. Start the system first.")
-            return
-
-        if not self._is_recording:
-            self._start_recording()
-        else:
-            self._stop_recording()
-
-    # Hàm gọi module VideoRecorder để bắt đầu ghi hình
-    def _start_recording(self) -> None:
-        if not self.video_recorder or self._is_recording:
-            return
-        self.video_recorder.start_recording()
-        self._is_recording = True
-        self.record_button.configure(text="STOP RECORD")
-        self._log("Manual recording started.")
-
-    # Hàm gọi module VideoRecorder để dừng ghi hình
-    def _stop_recording(self) -> None:
-        if not self.video_recorder or not self._is_recording:
-            return
-        self.video_recorder.stop_recording()
-        self._is_recording = False
-        self.record_button.configure(text="RECORD")
-        self._log("Recording stopped.")
-
-    # Hàm bật/tắt nút RECORD dựa trên trạng thái hệ thống và module recorder
-    def _update_record_button_state(self) -> None:
-        if self.video_recorder and self._is_system_running:
-            self.record_button.configure(state=tk.NORMAL)
-        else:
-            self.record_button.configure(state=tk.DISABLED)
-            if self._is_recording:
-                self._stop_recording()
-
-    def get_roi_rect(self, frame_width: int, frame_height: int) -> Tuple[int, int, int, int]:
-        """Lấy ROI hiện tại từ MotionDetector, mặc định là toàn khung."""
-        roi = motion_detector_module.roi
-        if roi is None:
-            return (0, 0, frame_width, frame_height)
-        x, y, w, h = roi
-        return (x, y, w, h)
-
-    def reset_roi(self) -> None:
-        motion_detector_module.roi = None
-        self._log("ROI đã được đặt lại về toàn khung.")
-
-    def _hide_placeholder(self) -> None:
-        if self.video_placeholder.winfo_manager():
-            self.video_placeholder.pack_forget()
-
-    def _show_placeholder(self, text: str = "Video feed preview") -> None:
-        if not self.video_placeholder.winfo_manager():
-            self.video_placeholder.pack(fill=tk.BOTH, expand=True)
-        self.video_placeholder.configure(text=text, image="")
-
-    def _start_motion_detector_embed(self) -> None:
-        if not hasattr(motion_detector_module, "main"):
-            self._log("Không tìm thấy MotionDetector.main().")
-            return
-        if self._detector_thread and self._detector_thread.is_alive():
-            return
-
-        self.video_container.update_idletasks()
-        width = max(self.video_container.winfo_width(), 320)
-        height = max(self.video_container.winfo_height(), 240)
-
-        if hasattr(motion_detector_module, "set_embed_target"):
-            motion_detector_module.set_embed_target(
-                self.video_container.winfo_id(), width, height
-            )
-
-        self._hide_placeholder()
-
-        def _runner() -> None:
-            try:
-                motion_detector_module.main()
-            except Exception as exc:  # pragma: no cover
-                self._log(f"MotionDetector dừng: {exc}")
-            finally:
-                if hasattr(motion_detector_module, "set_embed_target"):
-                    motion_detector_module.set_embed_target(None, 0, 0)
-                self.root.after(0, self._show_placeholder)
-
-        self._detector_thread = threading.Thread(target=_runner, daemon=True)
-        self._detector_thread.start()
-
-    def _stop_motion_detector_embed(self) -> None:
-        if hasattr(motion_detector_module, "request_stop"):
-            motion_detector_module.request_stop()
-        if self._detector_thread:
-            self._detector_thread.join(timeout=2.0)
-            self._detector_thread = None
-        if hasattr(motion_detector_module, "set_embed_target"):
-            motion_detector_module.set_embed_target(None, 0, 0)
-        self._show_placeholder()
-
-    def _write_log_text(self, content: str, replace: bool = False) -> None:
-        self.log_text.configure(state=tk.NORMAL)
-        if replace:
-            self.log_text.delete("1.0", tk.END)
-        self.log_text.insert(tk.END, content)
-        self.log_text.see(tk.END)
-        self.log_text.configure(state=tk.DISABLED)
-
-    def _start_alert_history_feed(self) -> None:
-        self._alert_log_position = 0
-        self._stop_alert_history_feed()
-        self._poll_alert_history(initial=True)
-
-    def _poll_alert_history(self, initial: bool = False) -> None:
-        path = self._alert_log_path
-        try:
-            if not path.exists():
-                if initial:
-                    self._write_log_text("Waiting for alert_history.log...\n", replace=True)
-            else:
-                with path.open("rb") as handle:
-                    if initial:
-                        data = handle.read()
-                    else:
-                        handle.seek(self._alert_log_position)
-                        data = handle.read()
-                    self._alert_log_position = handle.tell()
-                if data:
-                    text = data.decode("utf-8", errors="replace")
-                    self._write_log_text(text, replace=initial)
-        except OSError as err:
-            self._write_log_text(f"Failed to read alert_history.log: {err}\n", replace=initial)
-
-        self._alert_log_job = self.root.after(2000, self._poll_alert_history)
-
-    def _stop_alert_history_feed(self) -> None:
-        if self._alert_log_job:
-            self.root.after_cancel(self._alert_log_job)
-            self._alert_log_job = None
-
-
-
+        # CỤM NÚT ĐIỀU KHIỂN
+        btn_container = tk.Frame(sidebar, bg=COLOR_SIDEBAR)
+        btn_container.pack(side="top", fill="x", pady=(0, 10))
+
+        def create_bordered_btn(parent, text, text_color, border_color, cmd, icon_char=""):
+            border_frame = tk.Frame(parent, bg=border_color, padx=2, pady=2)
+            border_frame.pack(fill="x", expand=False, pady=6)
+
+            btn = tk.Button(border_frame, text=f"{icon_char} {text}",
+                            bg="white", fg=text_color,
+                            font=("Arial", 10, "bold"), bd=0,
+                            activebackground="#f0f0f0", cursor="hand2", command=cmd)
+            btn.pack(fill="both", expand=True, ipady=8)
+            return btn, border_frame
+
+        self.btn_start, _ = create_bordered_btn(btn_container, "START", "#000", BORDER_GREEN, self.start_cb, "▶")
+        self.btn_stop, _ = create_bordered_btn(btn_container, "STOP", "#000", BORDER_RED, self.stop_cb, "■")
+        self.btn_zoning, _ = create_bordered_btn(btn_container, "ZONING", "#000", BORDER_BLUE, self.zoning_cb, "⚠")
+        self.btn_capture, _ = create_bordered_btn(btn_container, "CAPTURE", "#000", BORDER_BLUE, self.capture_cb, "📷")
+        self.btn_record, self.frm_record = create_bordered_btn(btn_container, "RECORD", "#dc3545", BORDER_BLUE,
+                                                               self.record_cb, "●")
+        # Spacer 1
+        tk.Frame(sidebar, bg=COLOR_SIDEBAR).pack(side="top", fill="y", expand=True)
+
+        # BẢNG SETTINGS
+        panel_frame = tk.LabelFrame(sidebar, text=" Settings ", bg=COLOR_PANEL_BG, fg="black",
+                                    font=("Arial", 11, "bold"), bd=1, relief="solid")
+        panel_frame.pack(side="top", fill="x", ipady=10)
+
+        tk.Label(panel_frame, text="Ignore Small Objects (Size):", bg=COLOR_PANEL_BG, fg=COLOR_TEXT_PANEL,
+                 font=("Arial", 9)).pack(anchor="w", padx=5)
+        self.scale_sens = tk.Scale(panel_frame, from_=100, to=5000, orient="horizontal", bg=COLOR_PANEL_BG, fg="black",
+                                   troughcolor="#ddd", highlightthickness=0)
+        self.scale_sens.set(1000)
+        self.scale_sens.pack(fill="x", padx=5, pady=(0, 10))
+
+        tk.Label(panel_frame, text="Time to Record (Seconds):", bg=COLOR_PANEL_BG, fg=COLOR_TEXT_PANEL,
+                 font=("Arial", 9)).pack(anchor="w", padx=5)
+        self.scale_time = tk.Scale(panel_frame, from_=5, to=60, orient="horizontal", bg=COLOR_PANEL_BG, fg="black",
+                                   troughcolor="#ddd", highlightthickness=0)
+        self.scale_time.set(15)
+        self.scale_time.pack(fill="x", padx=5)
+
+        tk.Label(panel_frame, text="System Monitor", bg=COLOR_PANEL_BG, fg="#555", font=("Arial", 9, "bold")).pack(
+            anchor="w", padx=5, pady=(10, 0))
+        self.lbl_stats = tk.Label(panel_frame, text="Ready...", bg="white", fg="black", font=("Consolas", 9),
+                                  justify="left", anchor="nw", height=5, bd=1, relief="sunken")
+        self.lbl_stats.pack(fill="x", padx=5, pady=5)
+
+        # Spacer 2
+        tk.Frame(sidebar, bg=COLOR_SIDEBAR).pack(side="top", fill="y", expand=True)
+
+        # --- MAIN AREA ---
+        main_container = tk.Frame(self.root, bg=COLOR_BG, padx=5, pady=5)
+        main_container.grid(row=0, column=1, sticky="nsew")
+
+        content_area = tk.Frame(main_container, bg=COLOR_BG)
+        content_area.pack(fill="both", expand=True)
+
+        # VIDEO FRAME
+        video_container_border = tk.Frame(content_area, bg=COLOR_VIDEO_BORDER, padx=2, pady=2)
+        video_container_border.place(relx=0, rely=0, relwidth=1, relheight=0.75)
+
+        video_container_bg = tk.Frame(video_container_border, bg="white")
+        video_container_bg.pack(fill="both", expand=True)
+
+        self.video_frame = tk.Frame(video_container_bg, bg="white", bd=0)
+        self.video_frame.pack(fill="both", expand=True)
+
+        self.lbl_video = tk.Label(self.video_frame, bg="white", cursor="cross")
+        self.lbl_video.pack(fill="both", expand=True)
+
+        # BOTTOM INFO
+        bottom_frame = tk.Frame(content_area, bg=COLOR_BG)
+        bottom_frame.place(relx=0, rely=0.75, relwidth=1, relheight=0.25)
+
+        controls_row = tk.Frame(bottom_frame, bg=COLOR_BG)
+        controls_row.pack(fill="x", padx=0, pady=10)
+
+        tk.Button(controls_row, text="📂 History Folder", bg="#0056b3", fg="white", bd=0, font=("Arial", 10, "bold"),
+                  command=self.history_cb, width=16, height=1).pack(side="left")
+        self.lbl_status = tk.Label(controls_row, text="SAFE", bg="#28a745", fg="white", width=12,
+                                   font=("Arial", 9, "bold"))
+        self.lbl_status.pack(side="left", padx=5)
+
+        timeline_container = tk.Frame(controls_row, bg=COLOR_BG)
+        timeline_container.pack(side="left", fill="x", expand=True)
+
+        self.lights = []
+        for i in range(15):
+            l = tk.Label(timeline_container, bg="#ddd", relief="flat", bd=0)
+            l.pack(side="left", fill="both", expand=True, padx=1, ipady=4)
+            self.lights.append(l)
+
+        self.progress = ttk.Progressbar(bottom_frame, orient="horizontal", mode="determinate")
+        self.progress.pack(fill="x", padx=0, pady=2)
+
+        # HISTORY SLOTS
+        thumbs_row = tk.Frame(bottom_frame, bg=COLOR_BG)
+        thumbs_row.pack(fill="both", expand=True, padx=0, pady=5)
+
+        self.history_slots = []
+        for i in range(4):
+            f = tk.Frame(thumbs_row, bg="#ccc", padx=1, pady=1)
+            f.pack(side="left", fill="both", expand=True, padx=2)
+            lbl = tk.Label(f, bg=COLOR_BG, text=f"Trống", fg="#999", font=("Arial", 10), cursor="hand2", wraplength=150)
+            lbl.pack(fill="both", expand=True)
+            lbl.bind("<Button-1>", lambda event, idx=i: self.on_history_click(idx))
+            self.history_slots.append(lbl)
+
+    def reset_dashboard(self):
+        self.lbl_status.config(text="SAFE", bg="#28a745")
+        self.progress["value"] = 0
+        for light in self.lights: light.config(bg="#ddd")
+        self.lbl_video.configure(image='')
+        self.btn_zoning.config(bg="white", fg="#0056b3")
+        self.btn_record.config(bg="white", text="● RECORD")
+
+    def update_stats_text(self, text):
+        self.lbl_stats.config(text=text)
+
+
+# MAIN TEST
 if __name__ == "__main__":
+    import time
+
+
+    # Các callback functions để test
+    def on_start():
+        print("[TEST] Nút START được nhấn")
+        app.update_stats_text("System Started\nCamera: Active\nStatus: Monitoring...")
+
+
+    def on_stop():
+        print("[TEST] Nút STOP được nhấn")
+        app.reset_dashboard()
+        app.update_stats_text("System Stopped\nCamera: Inactive\nStatus: Ready...")
+
+
+    def on_history():
+        print("[TEST] Nút History Folder được nhấn")
+        test_dir = "test_history"
+        if not os.path.exists(test_dir):
+            os.makedirs(test_dir)
+        print(f"[TEST] Thư mục test: {os.path.abspath(test_dir)}")
+        try:
+            os.startfile(test_dir)
+        except:
+            print(f"[TEST] Không thể mở thư mục")
+
+
+    def on_zoning():
+        print("[TEST] Nút ZONING được nhấn")
+        app.btn_zoning.config(bg="#ffc107", fg="black")
+        app.update_stats_text("Zoning Mode: Active\nClick on video to set zones...")
+
+
+    def on_capture():
+        print("[TEST] Nút CAPTURE được nhấn")
+        test_dir = "test_captures"
+        if not os.path.exists(test_dir):
+            os.makedirs(test_dir)
+        filename = f"capture_{int(time.time())}.jpg"
+        filepath = os.path.join(test_dir, filename)
+        print(f"[TEST] Capture: {filepath}")
+        app.push_to_history_queue(filepath)
+
+
+    def on_record():
+        print("[TEST] Nút RECORD được nhấn")
+        if app.btn_record.cget("text") == "● RECORD":
+            app.btn_record.config(bg="#dc3545", text="● RECORDING", fg="white")
+            app.update_stats_text("Recording: ON\nSaving video...")
+        else:
+            app.btn_record.config(bg="white", text="● RECORD", fg="#dc3545")
+            test_dir = "test_records"
+            if not os.path.exists(test_dir):
+                os.makedirs(test_dir)
+            filename = f"record_{int(time.time())}.mp4"
+            filepath = os.path.join(test_dir, filename)
+            print(f"[TEST] Record: {filepath}")
+            app.push_to_history_queue(filepath)
+            app.update_stats_text("Recording: OFF\nVideo saved successfully")
+
+
+    # Tạo root window và khởi tạo AppGUI
     root = tk.Tk()
-    try:
-        root.state("zoomed")
-    except tk.TclError:
-        root.attributes("-zoomed", True)
-    gui = AppGUI(root)
+    root.geometry("1200x700")
+    root.minsize(800, 600)
+
+    app = AppGUI(
+        root=root,
+        start_cb=on_start,
+        stop_cb=on_stop,
+        history_cb=on_history,
+        zoning_cb=on_zoning,
+        capture_cb=on_capture,
+        record_cb=on_record
+    )
+
+    # Hiển thị thông báo ban đầu
+    app.update_stats_text("System Ready\nWaiting for commands...\n\nTest Mode Active")
+
+    print("=" * 50)
+    print("APP GUI TEST - Đã khởi động!")
+    print("=" * 50)
+    print("Nhấn các nút để test các chức năng")
+    print("=" * 50)
+
+    # Chạy ứng dụng
     root.mainloop()
