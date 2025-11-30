@@ -1,123 +1,64 @@
-import time
-import threading
 import pygame
-import os
-from datetime import datetime
+import time
 
 
 class AlertManager:
-    def __init__(self):
-        pygame.mixer.init()
+    def __init__(self, sound_file="alert.mp3"):
+        self.status_level = 0
+        self.state = "SAFE"
+        self.danger_limit = 15.0
+        self.cooldown_timer = 0
+        self.cooldown_duration = 10.0
 
-        # ============================
-        # CẤU HÌNH ÂM THANH
-        # ============================
-        self.config = {
-            "light": {"file": "light.mp3"},
-            "strong": {"file": "strong.mp3"}
-        }
-
-        # Tạo file rỗng nếu chưa có
-        for key, val in self.config.items():
-            if not os.path.exists(val["file"]):
-                with open(val["file"], 'w') as f:
-                    pass
-
-        # ============================
-        # TRẠNG THÁI HỆ THỐNG
-        # ============================
-        self.loop_flags = {
-            "light": False,
-            "strong": False
-        }
-
-        self.log_file = "alert_history.log"
-        self.log_lock = threading.Lock()
-
-    # =====================================================
-    #                       LIGHT ALERT
-    # =====================================================
-    def alert_light(self):
-        """Phát 1 lần"""
-        self.loop_flags["light"] = True
-        self._write_log("light", "PLAY ONCE")
-
+        if not pygame.mixer.get_init(): pygame.mixer.init()
         try:
-            pygame.mixer.music.load(self.config["light"]["file"])
-            pygame.mixer.music.play()
-        except Exception as e:
-            print("[LIGHT ERROR]", e)
-
-    def stop_light(self):
-        self.loop_flags["light"] = False
-        self._stop_audio()
-        self._write_log("light", "STOP")
-
-    # =====================================================
-    #                    STRONG ALERT (PHÁT 1 LẦN)
-    # =====================================================
-    def alert_strong(self):
-        """Báo động mạnh – phát 1 lần giống light"""
-        self.loop_flags["strong"] = True
-        self._write_log("strong", "PLAY ONCE")
-
-        try:
-            pygame.mixer.music.load(self.config["strong"]["file"])
-            pygame.mixer.music.play()
-        except Exception as e:
-            print("[STRONG ERROR]", e)
-
-    def stop_strong(self):
-        self.loop_flags["strong"] = False
-        try:
-            pygame.mixer.music.stop()
+            self.sound = pygame.mixer.Sound(sound_file)
+            self.sound.set_volume(1.0)
         except:
-            pass
-        self._write_log("strong", "STOP")
+            self.sound = None
+        self.last_update = time.time()
 
-    # =====================================================
-    #                       STOP ALL
-    # =====================================================
-    def stop_all(self):
-        self.loop_flags["light"] = False
-        self.loop_flags["strong"] = False
+    def set_danger_limit(self, seconds):
+        self.danger_limit = float(seconds)
 
-        pygame.mixer.stop()
+    def update(self, motion_detected):
+        current_time = time.time()
+        dt = current_time - self.last_update
+        self.last_update = current_time
 
-        self._write_log("ALL", "STOP ALL")
+        if motion_detected:
+            self.status_level += dt
+            self.cooldown_timer = self.cooldown_duration
+        else:
+            if self.status_level >= self.danger_limit and self.cooldown_timer > 0:
+                self.cooldown_timer -= dt
+                self.status_level = self.danger_limit + 1
+            else:
+                self.status_level -= dt * 2
+        self.status_level = max(0, min(self.status_level, self.danger_limit + 2))
+        limit = self.danger_limit
 
-    # =====================================================
-    #                        UTILITY
-    # =====================================================
-    def _stop_audio(self):
-        try:
-            pygame.mixer.music.stop()
-        except:
-            pass
+        if self.status_level < (limit * 0.33):
+            self.state = "SAFE"
+            color_ui = "#28a745"
+        elif self.status_level < (limit * 0.66):
+            self.state = "WARNING"
+            color_ui = "#ffc107"
+        else:
+            self.state = "DANGER"
+            color_ui = "#dc3545"
+        if self.state == "WARNING" or self.state == "DANGER":
+            if self.sound and not pygame.mixer.get_busy():
+                self.sound.play()
+        else:
+            if self.sound:
+                self.sound.stop()
 
-    def _write_log(self, level, msg):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"[{timestamp}] [{level.upper()}] {msg}\n"
-        print(line.strip())
+        return self.state, self.status_level, color_ui
 
-        with self.log_lock:
-            with open(self.log_file, "a", encoding="utf-8") as f:
-                f.write(line)
-
-
-# =====================================================
-#                     DEMO CHẠY THỬ
-# =====================================================
-if __name__ == "__main__":
-    system = AlertManager()
-
-    print("\n>>> LIGHT (1 lần)")
-    system.alert_light()
-    time.sleep(2)
-
-    print("\n>>> STRONG (1 lần)")
-    system.alert_strong()
-    time.sleep(5)
-
-    print("\n>>> STOP ALL")
-    system.stop_all()
+    def reset(self):
+        self.status_level = 0
+        self.state = "SAFE"
+        self.cooldown_timer = 0
+        self.last_update = time.time()
+        if self.sound: self.sound.stop()
