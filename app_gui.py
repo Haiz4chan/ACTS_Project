@@ -3,6 +3,13 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 import cv2
 import os
+import sys
+
+def resource_path(relative_path):
+    """ Lấy đường dẫn đúng cho file khi chạy EXE hoặc chạy Python """
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 # --- CẤU HÌNH MÀU SẮC ---
 COLOR_BG = "#F8F8FF"
@@ -56,7 +63,7 @@ class AppGUI:
         lbl_logo.pack(padx=5, pady=5)  # Padding để logo không dính sát viền
 
         try:
-            img = Image.open("logo.png")
+            img = Image.open(resource_path("logo.png"))
             # Resize nhỏ lại xíu để lọt lòng khung viền
             img.thumbnail((210, 210), Image.Resampling.LANCZOS)
             self.logo_tk = ImageTk.PhotoImage(img)
