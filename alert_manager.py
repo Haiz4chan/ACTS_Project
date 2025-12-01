@@ -83,5 +83,6 @@ def demo_warning_only():
         state, level, ui = am.update(False)
         print(f"{i+20:02d} | motion=False | state={state:<8} | level={level:5.2f}")
         time.sleep(0.2)
+
 if __name__ == "__main__":
     demo_warning_only()
