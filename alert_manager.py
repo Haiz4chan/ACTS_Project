@@ -1,6 +1,14 @@
 import pygame
 import time
+import sys
+import os
 
+
+def resource_path(relative_path: str) -> str:
+    """Lấy đường dẫn đúng cho file khi chạy .py hoặc .exe (PyInstaller)."""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 class AlertManager:
     def __init__(self, sound_file="alert.mp3"):
@@ -9,11 +17,15 @@ class AlertManager:
         self.danger_limit = 15.0
         self.cooldown_timer = 0
         self.cooldown_duration = 10.0
-        if not pygame.mixer.get_init(): pygame.mixer.init()
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
+
         try:
-            self.sound = pygame.mixer.Sound(sound_file)
+            sound_path = resource_path(sound_file)
+            self.sound = pygame.mixer.Sound(sound_path)
             self.sound.set_volume(1.0)
-        except:
+        except Exception as e:
+            print("Error loading sound:", e)
             self.sound = None
         self.last_update = time.time()
     def set_danger_limit(self, seconds):
