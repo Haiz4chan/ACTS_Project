@@ -23,7 +23,6 @@ BORDER_GREEN = "#28a745"
 BORDER_RED = "#dc3545"
 BORDER_BLUE = "#0056b3"
 
-
 class AppGUI:
     def __init__(self, root, start_cb, stop_cb, history_cb, zoning_cb, capture_cb, record_cb):
         self.root = root
@@ -58,7 +57,6 @@ class AppGUI:
         # Tạo Frame nền trong (Màu trắng)
         logo_inner_frame = tk.Frame(logo_border_frame, bg="white")
         logo_inner_frame.pack(fill="both", expand=True)
-
         lbl_logo = tk.Label(logo_inner_frame, text="[LOGO]", font=("Arial", 16, "bold"), fg="#ccc", bg="white")
         lbl_logo.pack(padx=5, pady=5)  # Padding để logo không dính sát viền
 
@@ -133,13 +131,11 @@ class AppGUI:
         # VIDEO FRAME
         video_container_border = tk.Frame(content_area, bg=COLOR_VIDEO_BORDER, padx=2, pady=2)
         video_container_border.place(relx=0, rely=0, relwidth=1, relheight=0.75)
-
         video_container_bg = tk.Frame(video_container_border, bg="white")
         video_container_bg.pack(fill="both", expand=True)
 
         self.video_frame = tk.Frame(video_container_bg, bg="white", bd=0)
         self.video_frame.pack(fill="both", expand=True)
-
         self.lbl_video = tk.Label(self.video_frame, bg="white", cursor="cross")
         self.lbl_video.pack(fill="both", expand=True)
 
@@ -181,6 +177,29 @@ class AppGUI:
             lbl.bind("<Button-1>", lambda event, idx=i: self.on_history_click(idx))
             self.history_slots.append(lbl)
 
+    def on_history_click(self, index):
+        path = self.history_paths[index]
+        if path and os.path.exists(path): os.startfile(path)
+
+    def update_image(self, cv2_frame):
+        w_cont = self.video_frame.winfo_width()
+        h_cont = self.video_frame.winfo_height()
+        if w_cont > 10 and h_cont > 10:
+            color_correct_frame = cv2.cvtColor(cv2_frame, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(color_correct_frame)
+            img_w, img_h = img.size
+            ratio = min(w_cont / img_w, h_cont / img_h)
+            new_w = int(img_w * ratio)
+            new_h = int(img_h * ratio)
+            img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            bg_img = Image.new('RGB', (w_cont, h_cont), (255, 255, 255))
+            bg_img.paste(img_resized, ((w_cont - new_w) // 2, (h_cont - new_h) // 2))
+            imgtk = ImageTk.PhotoImage(image=bg_img)
+            self.lbl_video.imgtk = imgtk
+            self.lbl_video.configure(image=imgtk)
+            return ratio, (w_cont - new_w) // 2, (h_cont - new_h) // 2
+        return 1, 0, 0
+
     def reset_dashboard(self):
         self.lbl_status.config(text="SAFE", bg="#28a745")
         self.progress["value"] = 0
@@ -188,6 +207,34 @@ class AppGUI:
         self.lbl_video.configure(image='')
         self.btn_zoning.config(bg="white", fg="#0056b3")
         self.btn_record.config(bg="white", text="● RECORD")
+
+    def update_dashboard(self, level, state, color, max_time=15.0):
+        self.lbl_status.config(text=state, bg=color)
+        pct = (level / max_time) * 100
+        self.progress["value"] = pct
+        active_lights = int((level / max_time) * 15)
+        active_lights = min(active_lights, 15)
+        for i, light in enumerate(self.lights):
+            if i < active_lights:
+                if i < 5: light.config(bg="#28a745")
+                elif i < 10: light.config(bg="#ffc107")
+                else: light.config(bg="#dc3545")
+            else:
+                light.config(bg="#ddd")
+
+    def push_to_history_queue(self, file_path):
+        self.history_paths.insert(0, file_path)
+        self.history_paths.pop()
+        for i in range(4):
+            path = self.history_paths[i]
+            lbl = self.history_slots[i]
+            if path:
+                filename = os.path.basename(path)
+                lbl.config(text=f"🎥 REC:\n{filename}", bg="#778899", fg="white", font=("Arial", 9, "bold"))
+                lbl.master.config(bg="#778899")
+            else:
+                lbl.config(text="Trống", bg=COLOR_BG, fg="#999")
+                lbl.master.config(bg="#ccc")
 
     def update_stats_text(self, text):
         self.lbl_stats.config(text=text)
@@ -197,18 +244,15 @@ class AppGUI:
 if __name__ == "__main__":
     import time
 
-
     # Các callback functions để test
     def on_start():
         print("[TEST] Nút START được nhấn")
         app.update_stats_text("System Started\nCamera: Active\nStatus: Monitoring...")
 
-
     def on_stop():
         print("[TEST] Nút STOP được nhấn")
         app.reset_dashboard()
         app.update_stats_text("System Stopped\nCamera: Inactive\nStatus: Ready...")
-
 
     def on_history():
         print("[TEST] Nút History Folder được nhấn")
@@ -221,12 +265,10 @@ if __name__ == "__main__":
         except:
             print(f"[TEST] Không thể mở thư mục")
 
-
     def on_zoning():
         print("[TEST] Nút ZONING được nhấn")
         app.btn_zoning.config(bg="#ffc107", fg="black")
         app.update_stats_text("Zoning Mode: Active\nClick on video to set zones...")
-
 
     def on_capture():
         print("[TEST] Nút CAPTURE được nhấn")
@@ -237,7 +279,6 @@ if __name__ == "__main__":
         filepath = os.path.join(test_dir, filename)
         print(f"[TEST] Capture: {filepath}")
         app.push_to_history_queue(filepath)
-
 
     def on_record():
         print("[TEST] Nút RECORD được nhấn")
@@ -255,8 +296,7 @@ if __name__ == "__main__":
             app.push_to_history_queue(filepath)
             app.update_stats_text("Recording: OFF\nVideo saved successfully")
 
-
-    # Tạo root window và khởi tạo AppGUI
+    # Tạo rot window và khởi tạo AppGUI
     root = tk.Tk()
     root.geometry("1200x700")
     root.minsize(800, 600)
