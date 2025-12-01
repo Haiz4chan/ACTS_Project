@@ -3,13 +3,6 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 import cv2
 import os
-import sys
-
-def resource_path(relative_path):
-    """ Lấy đường dẫn đúng cho file khi chạy EXE hoặc chạy Python """
-    if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
 
 # --- CẤU HÌNH MÀU SẮC ---
 COLOR_BG = "#F8F8FF"
@@ -63,7 +56,7 @@ class AppGUI:
         lbl_logo.pack(padx=5, pady=5)  # Padding để logo không dính sát viền
 
         try:
-            img = Image.open(resource_path("logo.png"))
+            img = Image.open("logo.png")
             # Resize nhỏ lại xíu để lọt lòng khung viền
             img.thumbnail((210, 210), Image.Resampling.LANCZOS)
             self.logo_tk = ImageTk.PhotoImage(img)
@@ -181,46 +174,6 @@ class AppGUI:
             lbl.bind("<Button-1>", lambda event, idx=i: self.on_history_click(idx))
             self.history_slots.append(lbl)
 
-    def on_history_click(self, index):
-        path = self.history_paths[index]
-        if path and os.path.exists(path): os.startfile(path)
-
-    def update_image(self, cv2_frame):
-        w_cont = self.video_frame.winfo_width()
-        h_cont = self.video_frame.winfo_height()
-        if w_cont > 10 and h_cont > 10:
-            color_correct_frame = cv2.cvtColor(cv2_frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(color_correct_frame)
-            img_w, img_h = img.size
-            ratio = min(w_cont / img_w, h_cont / img_h)
-            new_w = int(img_w * ratio)
-            new_h = int(img_h * ratio)
-            img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-            bg_img = Image.new('RGB', (w_cont, h_cont), (255, 255, 255))
-            bg_img.paste(img_resized, ((w_cont - new_w) // 2, (h_cont - new_h) // 2))
-            imgtk = ImageTk.PhotoImage(image=bg_img)
-            self.lbl_video.imgtk = imgtk
-            self.lbl_video.configure(image=imgtk)
-            return ratio, (w_cont - new_w) // 2, (h_cont - new_h) // 2
-        return 1, 0, 0
-
-    def update_dashboard(self, level, state, color, max_time=15.0):
-        self.lbl_status.config(text=state, bg=color)
-        pct = (level / max_time) * 100
-        self.progress["value"] = pct
-        active_lights = int((level / max_time) * 15)
-        active_lights = min(active_lights, 15)
-        for i, light in enumerate(self.lights):
-            if i < active_lights:
-                if i < 5:
-                    light.config(bg="#28a745")
-                elif i < 10:
-                    light.config(bg="#ffc107")
-                else:
-                    light.config(bg="#dc3545")
-            else:
-                light.config(bg="#ddd")
-
     def reset_dashboard(self):
         self.lbl_status.config(text="SAFE", bg="#28a745")
         self.progress["value"] = 0
@@ -228,20 +181,6 @@ class AppGUI:
         self.lbl_video.configure(image='')
         self.btn_zoning.config(bg="white", fg="#0056b3")
         self.btn_record.config(bg="white", text="● RECORD")
-
-    def push_to_history_queue(self, file_path):
-        self.history_paths.insert(0, file_path)
-        self.history_paths.pop()
-        for i in range(4):
-            path = self.history_paths[i]
-            lbl = self.history_slots[i]
-            if path:
-                filename = os.path.basename(path)
-                lbl.config(text=f"🎥 REC:\n{filename}", bg="#778899", fg="white", font=("Arial", 9, "bold"))
-                lbl.master.config(bg="#778899")
-            else:
-                lbl.config(text="Trống", bg=COLOR_BG, fg="#999")
-                lbl.master.config(bg="#ccc")
 
     def update_stats_text(self, text):
         self.lbl_stats.config(text=text)
