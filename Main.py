@@ -180,7 +180,7 @@ class MainSystem:
                 if self.zone_rect:
                     zx, zy, zw, zh = self.zone_rect
                     cv2.rectangle(frame, (zx, zy), (zx + zw, zy + zh), (255, 0, 255), 2)
-                    cv2.putText(frame, " ", (zx, zy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
+                    cv2.putText(frame, "", (zx, zy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
                 if self.is_zoning_mode and self.drawing:
                     cv2.rectangle(frame, self.start_point, self.end_point, (0, 165, 255), 2)
 
